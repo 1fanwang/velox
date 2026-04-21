@@ -318,6 +318,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
       joinNode_(joinNode),
       probeType_(joinNode_->sources()[0]->outputType()),
       buildType_(joinNode_->sources()[1]->outputType()),
+      exprCtx_{operatorCtx_->execCtx()->queryCtx(), operatorCtx_->pool()},
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
@@ -417,8 +418,7 @@ void CudfHashJoinProbe::initialize() {
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
   CudfExpressionCompiler compiler(
       facebook::velox::type::concatRowTypes(filterRowTypes),
-      operatorCtx_->execCtx()->queryCtx(),
-      operatorCtx_->pool());
+      exprCtx_);
   filterEvaluator_ = compiler.compile(joinNode_->filter());
 
   // Build a separate cudf::ast::tree for the two-table
@@ -432,7 +432,8 @@ void CudfHashJoinProbe::initialize() {
         buildType_,
         probeType_,
         rightPrecomputeInstructions_,
-        leftPrecomputeInstructions_);
+        leftPrecomputeInstructions_,
+          exprCtx_);
   } else {
     createAstTree(
         compiler.optimizedExpr(),
@@ -441,7 +442,8 @@ void CudfHashJoinProbe::initialize() {
         probeType_,
         buildType_,
         leftPrecomputeInstructions_,
-        rightPrecomputeInstructions_);
+        rightPrecomputeInstructions_,
+        exprCtx_);
   }
 }
 

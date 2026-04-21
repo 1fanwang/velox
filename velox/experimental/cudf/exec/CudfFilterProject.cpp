@@ -31,6 +31,7 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <unordered_map>
 
@@ -123,7 +124,8 @@ CudfFilterProject::CudfFilterProject(
                   : std::static_pointer_cast<const core::PlanNode>(filter)),
       hasFilter_(filter != nullptr),
       project_(project),
-      filter_(filter) {
+      filter_(filter),
+      exprCtx_{operatorCtx_->execCtx()->queryCtx(), operatorCtx_->pool()} {
   if (filter_ != nullptr && project_ != nullptr) {
     folly::Synchronized<exec::OperatorStats>& opStats = Operator::stats();
     opStats.withWLock([&](auto& stats) {
@@ -170,8 +172,6 @@ void CudfFilterProject::initialize() {
 
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
-  auto* queryCtx = operatorCtx_->execCtx()->queryCtx();
-  auto* pool = operatorCtx_->pool();
 
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
@@ -181,17 +181,25 @@ void CudfFilterProject::initialize() {
       debugPrintTree(expr, 0, LOG(INFO));
     }
   }
-  CudfExpressionCompiler compiler(inputType, queryCtx, pool);
+  CudfExpressionCompiler compiler(inputType, exprCtx_);
   if (hasFilter_) {
     // First expr is Filter, rest are Project.
     filterEvaluator_ = compiler.compile(allExprs.front());
-    for (size_t i = 1; i < allExprs.size(); ++i) {
-      projectEvaluators_.push_back(compiler.compile(allExprs[i]));
-    }
+    std::transform(
+        allExprs.begin() + 1,
+        allExprs.end(),
+        std::back_inserter(projectEvaluators_),
+        [&compiler](const core::TypedExprPtr& expr) {
+          return compiler.compile(expr);
+        });
   } else {
-    for (const auto& expr : allExprs) {
-      projectEvaluators_.push_back(compiler.compile(expr));
-    }
+    std::transform(
+        allExprs.begin(),
+        allExprs.end(),
+        std::back_inserter(projectEvaluators_),
+        [&compiler](const core::TypedExprPtr& expr) {
+          return compiler.compile(expr);
+        });
   }
 
   filter_.reset();
